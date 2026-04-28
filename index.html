@@ -1137,28 +1137,27 @@ async function sGet(k, sh=false){
 async function sSet(k, v, sh=false){
   if(k.startsWith('player:')){
     const username = k.slice(7);
-    await sbFetch('/rest/v1/players', 'POST', {
+    const ok = await sbFetch('/rest/v1/players', 'POST', {
       username,
-      password_hash: v.pw || '',
-      char_data: v.char || null,
+      password_hash: v.pw||'',
+      char_data: v.char||null,
       updated_at: new Date().toISOString()
     });
+    console.log('sSet player', username, ok?'OK':'FAILED', 'level:', v.char?.level);
   }
   if(k.startsWith('lb:')){
     const username = k.slice(3);
-    // Map 'cls' → 'class' for the leaderboard table
-    const row = {
+    await sbFetch('/rest/v1/leaderboard', 'POST', {
       username,
-      class: v.cls || v.class || '',
-      level: v.level || 1,
-      wins: v.wins || 0,
-      kills: v.kills || 0,
-      icon: v.icon || '⚔️',
-      zone: v.zone || 'forest',
-      pvp_wins: v.pvpWins || 0,
+      class: v.cls||v.class||'',
+      level: v.level||1,
+      wins: v.wins||0,
+      kills: v.kills||0,
+      icon: v.icon||'⚔️',
+      zone: v.zone||'forest',
+      pvp_wins: v.pvpWins||0,
       updated_at: new Date().toISOString()
-    };
-    await sbFetch('/rest/v1/leaderboard', 'POST', row);
+    });
   }
 }
 
@@ -1209,21 +1208,29 @@ async function doRegister(){
   toast('¡Guerrero creado!','ok');initGame();
 }
 async function savePlayer(){
-  if(!SS.user||!SS.char)return;
-  // Always use cached password - never depend on reading back from storage
-  if(!SS._pw){
-    // Try once to recover pw if missing
-    const ex=await sGet('player:'+SS.user);
-    if(ex?.pw) SS._pw=ex.pw;
+  if(!SS.user||!SS.char){
+    console.warn('savePlayer: skipped - no user or char', SS.user, !!SS.char);
+    return;
   }
-  if(!SS._pw){console.warn('savePlayer: no pw cached, skipping');return}
-  await sSet('player:'+SS.user,{pw:SS._pw,char:SS.char});
-  const c=SS.char;
-  await sSet('lb:'+SS.user,{
-    cls:c.cls, level:c.level, wins:c.wins||0,
-    kills:c.totalKills||0, icon:CLASSES[c.cls]?.icon||'⚔️',
-    zone:c.zone||'forest', pvpWins:c.pvpWins||0,
-  },true);
+  // Recover pw if missing
+  if(!SS._pw){
+    console.warn('savePlayer: _pw missing, trying to recover...');
+    const ex = await sGet('player:'+SS.user);
+    if(ex?.pw) SS._pw = ex.pw;
+    else { console.error('savePlayer: cannot recover pw, aborting'); return; }
+  }
+  try {
+    await sSet('player:'+SS.user, {pw:SS._pw, char:SS.char});
+    const c=SS.char;
+    await sSet('lb:'+SS.user, {
+      cls:c.cls, level:c.level, wins:c.wins||0,
+      kills:c.totalKills||0, icon:CLASSES[c.cls]?.icon||'⚔️',
+      zone:c.zone||'forest', pvpWins:c.pvpWins||0,
+    }, true);
+    console.log('savePlayer: OK - level', c.level, 'gold', c.gold);
+  } catch(e) {
+    console.error('savePlayer: exception', e);
+  }
 }
 async function logout(){
   if(SS.user&&SS.char&&SS._pw){
@@ -1317,7 +1324,13 @@ async function confirmCreate(){
     perWinAtk:0,perWinDef:0,totalDmg:0,bosses:0,pvpWins:0,quests:{},
     appearance:{...APP},
   };
-  await savePlayer();initGame();
+  // Make sure _pw is set before saving
+  if(!SS._pw){
+    const ex = await sGet('player:'+SS.user);
+    if(ex?.pw) SS._pw = ex.pw;
+  }
+  await savePlayer();
+  initGame();
 }
 
 // ── WORLD MAP ─────────────────────────────────────────────────────────────
@@ -2908,10 +2921,12 @@ window.addEventListener('beforeunload',()=>{
 // Also auto-save every 30s
 setInterval(async()=>{
   if(SS.user&&SS.char&&SS._pw){
-    try{ await savePlayer(); saveLastOnline(); }
-    catch(e){ console.warn('autosave failed:', e); }
+    try{
+      await savePlayer();
+      saveLastOnline();
+    } catch(e){ console.warn('autosave failed:', e); }
   }
-},15000); // Save every 15s
+},10000); // Save every 10s
 
 // initGame is patched inline above - no override needed
 
